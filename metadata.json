@@ -1,0 +1,6 @@
+{
+  "name": "학생 성장 대시보드 (수학 서·논술형 평가)",
+  "description": "초등학교 4학년 수학 서·논술형 평가([4수04-01] 막대그래프)의 1차 → 2차 성장을 AI가 자동 분석하고 영역별 성장을 시각화해 주는 교사용 대시보드입니다.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

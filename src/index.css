@@ -1,0 +1,74 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: 'Pretendard Variable', Pretendard, sans-serif;
+  --font-serif: 'Noto Serif KR', 'IBM Plex Serif', Georgia, serif;
+  --color-ink: #1a1a1a;
+  --color-ink-soft: #4a4a4a;
+  --color-ink-muted: #8a8a8a;
+  --color-ink-faint: #bdbdbd;
+  --color-paper: #faf9f4;
+  --color-paper-card: #ffffff;
+  --color-leaf-50: #f0f5ec;
+  --color-leaf-100: #dde9d2;
+  --color-leaf-200: #b8d199;
+  --color-leaf-400: #5a8b3a;
+  --color-leaf-600: #2d5a1f;
+  --color-leaf-700: #1f4015;
+  --color-coral: #c84b2a;
+  --color-coral-soft: #fbeae4;
+  --color-amber: #b87a1a;
+  --color-amber-soft: #faf0d8;
+  --color-line: #e8e5dc;
+  --color-line-strong: #d4d0c2;
+  --radius-radius: 10px;
+}
+
+/* Custom global focus rings and body setup */
+body {
+  font-family: var(--font-sans);
+  background-color: var(--color-paper);
+  color: var(--color-ink);
+  line-height: 1.6;
+}
+
+.font-serif-title {
+  font-family: var(--font-serif);
+}
+
+/* Smooth transitions */
+.transition-all-custom {
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Print Styles */
+@media print {
+  body {
+    background-color: #ffffff !important;
+    color: #1a1a1a !important;
+    font-size: 12pt;
+    line-height: 1.5;
+  }
+  .no-print {
+    display: none !important;
+  }
+  .print-page-break {
+    page-break-after: always;
+  }
+  .print-card {
+    border: none !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+    margin-bottom: 2rem !important;
+    page-break-inside: avoid;
+  }
+  .print-grid {
+    display: block !important;
+  }
+  /* Ensure SVGs print correctly */
+  svg {
+    max-width: 100% !important;
+    page-break-inside: avoid;
+  }
+}
+
