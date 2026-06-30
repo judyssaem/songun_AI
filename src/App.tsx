@@ -18,7 +18,8 @@ import {
   FileText, 
   ChevronRight, 
   AlertCircle, 
-  CheckCircle2 
+  CheckCircle2,
+  Edit3
 } from "lucide-react";
 
 export default function App() {
@@ -45,8 +46,17 @@ export default function App() {
   const [addMethod, setAddMethod] = useState<"single" | "excel">("single");
   const [showClearConfirmModal, setShowClearConfirmModal] = useState(false);
   const [studentToDelete, setStudentToDelete] = useState<StudentData | null>(null);
-  const [newStudent, setNewStudent] = useState({ name: "", className: "", number: "" });
+  const [newStudent, setNewStudent] = useState({ name: "", grade: "", classVal: "", number: "" });
   const [editingStudent, setEditingStudent] = useState<StudentData | null>(null);
+
+  // Growth Dashboard edit states
+  const [isEditingDashboard, setIsEditingDashboard] = useState(false);
+  const [editDashboardData, setEditDashboardData] = useState<AnalysisResult | null>(null);
+
+  useEffect(() => {
+    setIsEditingDashboard(false);
+    setEditDashboardData(null);
+  }, [selectedStudentId]);
 
   // Statuses
   const [toasts, setToasts] = useState<Array<{ id: string; message: string; type: "success" | "error" | "info" }>>([]);
@@ -174,10 +184,25 @@ export default function App() {
       return;
     }
 
+    const grade = newStudent.grade.trim();
+    const classVal = newStudent.classVal.trim();
+    let combinedClassName = "";
+    if (grade && classVal) {
+      const g = grade.endsWith("학년") ? grade : `${grade}학년`;
+      const c = classVal.endsWith("반") ? classVal : `${classVal}반`;
+      combinedClassName = `${g} ${c}`;
+    } else if (grade) {
+      combinedClassName = grade.endsWith("학년") ? grade : `${grade}학년`;
+    } else if (classVal) {
+      combinedClassName = classVal.endsWith("반") ? classVal : `${classVal}반`;
+    } else {
+      combinedClassName = "4반"; // Fallback default
+    }
+
     const created: StudentData = {
       id: "std_" + Date.now().toString() + Math.random().toString(36).substr(2, 5),
       name: newStudent.name.trim(),
-      className: newStudent.className.trim() || "4반",
+      className: combinedClassName,
       number: newStudent.number.trim(),
       firstFiles: [],
       secondFiles: [],
@@ -189,7 +214,7 @@ export default function App() {
       await dbService.saveStudent(created);
       const updatedList = await dbService.getAllStudents();
       setStudents(updatedList);
-      setNewStudent({ name: "", className: "", number: "" });
+      setNewStudent({ name: "", grade: "", classVal: "", number: "" });
       setShowAddModal(false);
       showToast(`${created.name} 학생이 추가되었습니다.`, "success");
       if (!selectedStudentId) {
@@ -522,7 +547,7 @@ export default function App() {
         URL.revokeObjectURL(img.src);
         let width = img.width;
         let height = img.height;
-        const maxDim = 1200; // Limit max dimension to 1200px (retains high-fidelity text but minimizes file size)
+        const maxDim = 1000; // Limit max dimension to 1000px (retains excellent legibility while dramatically reducing size)
 
         if (width > maxDim || height > maxDim) {
           if (width > height) {
@@ -559,8 +584,8 @@ export default function App() {
         ctx.fillRect(0, 0, width, height);
         ctx.drawImage(img, 0, 0, width, height);
 
-        // Convert to high-quality JPEG (75% quality is optimal for readability vs compression)
-        const dataUrl = canvas.toDataURL("image/jpeg", 0.75);
+        // Convert to optimized JPEG (60% quality is the industry standard sweet-spot for readability vs file size)
+        const dataUrl = canvas.toDataURL("image/jpeg", 0.60);
         resolve(dataUrl.split(",")[1]);
       };
       img.onerror = () => {
@@ -578,6 +603,119 @@ export default function App() {
       };
     });
   }
+
+  // Helper function to compress existing base64 images on-the-fly before sending to API
+  async function compressImageBase64(base64: string, mimeType: string, maxDim = 1000, quality = 0.60): Promise<string> {
+    if (!mimeType || !mimeType.startsWith("image/")) {
+      return base64;
+    }
+    // If the base64 is already very small (under 100KB), we can skip canvas drawing to make it even faster
+    // 100KB in base64 is roughly 133,000 characters
+    if (base64.length < 133000) {
+      return base64;
+    }
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.src = `data:${mimeType};base64,${base64}`;
+      img.onload = () => {
+        let width = img.width;
+        let height = img.height;
+
+        if (width > maxDim || height > maxDim) {
+          if (width > height) {
+            height = Math.round((height * maxDim) / width);
+            width = maxDim;
+          } else {
+            width = Math.round((width * maxDim) / height);
+            height = maxDim;
+          }
+        }
+
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+
+        const ctx = canvas.getContext("2d");
+        if (!ctx) {
+          resolve(base64);
+          return;
+        }
+
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(0, 0, width, height);
+        ctx.drawImage(img, 0, 0, width, height);
+
+        const dataUrl = canvas.toDataURL("image/jpeg", quality);
+        resolve(dataUrl.split(",")[1]);
+      };
+      img.onerror = () => {
+        resolve(base64);
+      };
+    });
+  }
+
+  // --- Growth Dashboard Edit Handlers ---
+  const handleScoreChange = (
+    round: "first_scores" | "second_scores",
+    domain: "지식이해" | "과정기능" | "가치태도",
+    field: "score" | "max" | "normalized" | "evidence",
+    value: any
+  ) => {
+    setEditDashboardData((prev) => {
+      if (!prev) return null;
+      const currentRoundScores = prev[round] || {};
+      const currentDomainScores = currentRoundScores[domain] || { score: 0, max: 5, normalized: 0, evidence: "" };
+      
+      let updatedVal = value;
+      if (field === "score" || field === "max" || field === "normalized") {
+        updatedVal = value === "" ? "" : Number(value);
+      }
+
+      const updatedDomain = {
+        ...currentDomainScores,
+        [field]: updatedVal
+      };
+
+      // Auto-recalculate normalized if score or max changed
+      if (field === "score" || field === "max") {
+        const scoreNum = field === "score" ? Number(value) : Number(currentDomainScores.score);
+        const maxNum = field === "max" ? Number(value) : Number(currentDomainScores.max);
+        if (maxNum > 0) {
+          updatedDomain.normalized = Number(((scoreNum / maxNum) * 5).toFixed(1));
+        }
+      }
+
+      return {
+        ...prev,
+        [round]: {
+          ...currentRoundScores,
+          [domain]: updatedDomain
+        }
+      };
+    });
+  };
+
+  const handleSaveDashboardData = async () => {
+    if (!selectedStudent || !editDashboardData) return;
+    try {
+      const updatedStudent = {
+        ...selectedStudent,
+        analysis: {
+          ...selectedStudent.analysis!,
+          result: editDashboardData,
+          analyzedAt: Date.now()
+        }
+      };
+      await dbService.saveStudent(updatedStudent);
+      const updatedList = await dbService.getAllStudents();
+      setStudents(updatedList);
+      setIsEditingDashboard(false);
+      setEditDashboardData(null);
+      showToast(`${selectedStudent.name} 학생의 분석 결과가 저장되었습니다.`, "success");
+    } catch (err) {
+      showToast("분석 결과 저장에 실패했습니다.", "error");
+    }
+  };
 
   // --- API / AI Analysis Engine ---
   const analyzeSingleStudent = async (studentId: string, quiet: boolean = false): Promise<boolean> => {
@@ -619,6 +757,35 @@ export default function App() {
     await dbService.saveStudent(updatedWithRunning);
 
     try {
+      // Compress rubric & student files on-the-fly before API request to avoid Vercel payload limit (4.5MB)
+      const compressedRubric1Files = await Promise.all(
+        (settings.rubric1Files || []).map(async (f) => ({
+          ...f,
+          base64: await compressImageBase64(f.base64, f.type),
+        }))
+      );
+
+      const compressedRubric2Files = await Promise.all(
+        (settings.rubric2Files || []).map(async (f) => ({
+          ...f,
+          base64: await compressImageBase64(f.base64, f.type),
+        }))
+      );
+
+      const compressedFirstFiles = await Promise.all(
+        (student.firstFiles || []).map(async (f) => ({
+          ...f,
+          base64: await compressImageBase64(f.base64, f.type),
+        }))
+      );
+
+      const compressedSecondFiles = await Promise.all(
+        (student.secondFiles || []).map(async (f) => ({
+          ...f,
+          base64: await compressImageBase64(f.base64, f.type),
+        }))
+      );
+
       const response = await fetch("/api/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -628,17 +795,17 @@ export default function App() {
           rubric1: {
             mode: settings.rubric1Mode,
             text: settings.rubric1Text,
-            files: settings.rubric1Files,
+            files: compressedRubric1Files,
           },
           rubric2: {
             mode: settings.rubric2Mode,
             text: settings.rubric2Text,
-            files: settings.rubric2Files,
+            files: compressedRubric2Files,
           },
           student: {
             name: student.name,
-            firstFiles: student.firstFiles,
-            secondFiles: student.secondFiles,
+            firstFiles: compressedFirstFiles,
+            secondFiles: compressedSecondFiles,
           }
         }),
       });
@@ -1508,7 +1675,7 @@ export default function App() {
                         {/* 1차 평가지 업로드 영역 */}
                         <div className="flex flex-col gap-2">
                           <span className="text-xs font-semibold text-leaf-600">
-                            1차 평가지 (기본)
+                            1차 평가지
                           </span>
                           <div
                             onDragOver={(e) => handleDragOver(e, `${student.id}-1`)}
@@ -1555,7 +1722,7 @@ export default function App() {
                         {/* 2차 평가지 업로드 영역 */}
                         <div className="flex flex-col gap-2">
                           <span className="text-xs font-semibold text-amber">
-                            2차 평가지 (성장)
+                            2차 평가지
                           </span>
                           <div
                             onDragOver={(e) => handleDragOver(e, `${student.id}-2`)}
@@ -1751,173 +1918,436 @@ export default function App() {
                     </button>
                   </div>
                 ) : selectedResult ? (
-                  <>
-                    {/* 상단 타이틀 */}
-                    <div className="flex flex-col md:flex-row md:justify-between md:items-center gap-4 border-b border-line pb-4">
-                      <div className="flex items-center gap-4">
-                        <h2 className="font-serif-title text-2xl font-bold text-ink">{selectedStudent.name}</h2>
-                        <span className="text-ink-soft text-sm font-medium">
-                          {selectedStudent.className} · {selectedStudent.number ? `${selectedStudent.number}번` : "번호 미지정"}
+                  isEditingDashboard && editDashboardData ? (
+                    <div className="flex flex-col gap-6 animate-fade-in text-left">
+                      {/* 상단 타이틀 */}
+                      <div className="flex flex-col md:flex-row md:justify-between md:items-start gap-4 border-b border-line pb-4">
+                        <div className="flex flex-col gap-1">
+                          <h2 className="font-serif-title text-xl font-bold text-ink">
+                            {selectedStudent.name} 학생 분석 결과 검토 및 수정
+                          </h2>
+                          <p className="text-xs text-ink-muted">AI가 도출한 채점 점수와 정성 평가 및 지도 제안을 검토하고 수정할 수 있습니다.</p>
+                        </div>
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => {
+                              setIsEditingDashboard(false);
+                              setEditDashboardData(null);
+                            }}
+                            className="text-xs border border-line-strong hover:bg-leaf-50 bg-white px-3 py-2 rounded font-semibold cursor-pointer"
+                          >
+                            취소
+                          </button>
+                          <button
+                            onClick={handleSaveDashboardData}
+                            className="text-xs bg-leaf-600 hover:bg-leaf-700 text-white px-4 py-2 rounded font-semibold shadow-xs cursor-pointer"
+                          >
+                            저장하기
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Section 1: 영역별 정량 평가 수정 */}
+                      <div className="bg-leaf-50/20 p-5 rounded-lg border border-line flex flex-col gap-4">
+                        <h3 className="font-serif text-sm font-bold text-leaf-700 flex items-center gap-1.5">
+                          <CheckCircle2 className="w-4 h-4 text-leaf-600" />
+                          01. 영역별 정량 평가 수정
+                        </h3>
+
+                        {/* 영역별 상세 점수 */}
+                        <div className="flex flex-col gap-4 mt-2">
+                          <span className="text-[11px] font-bold text-ink-soft">영역별 점수 설정 (환산 점수와 기준 점수를 수정하면 5점 척도 환산점수가 자동으로 반영됩니다)</span>
+                          
+                          {(["지식이해", "과정기능", "가치태도"] as const).map((domain) => {
+                            const domainLabel = domain === "지식이해" ? "지식·이해" : domain === "과정기능" ? "과정·기능" : "가치·태도";
+                            const fScore = editDashboardData.first_scores?.[domain] || { score: 0, max: 5, normalized: 0, evidence: "" };
+                            const sScore = editDashboardData.second_scores?.[domain] || { score: 0, max: 5, normalized: 0, evidence: "" };
+                            
+                            return (
+                              <div key={domain} className="bg-white border border-line rounded-lg p-4 flex flex-col gap-3">
+                                <span className="text-xs font-bold text-leaf-600">{domainLabel} 영역</span>
+                                
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                  {/* 1차 평가 */}
+                                  <div className="p-3 bg-leaf-50/10 rounded border border-line/30 flex flex-col gap-2.5">
+                                    <span className="text-[10px] font-bold text-ink-muted uppercase">1차 평가 결과</span>
+                                    <div className="grid grid-cols-2 gap-3">
+                                      <div>
+                                        <label className="block text-[9px] text-ink-muted mb-1">환산 점수</label>
+                                        <input
+                                          type="number"
+                                          step="any"
+                                          value={fScore.score === "" ? "" : fScore.score}
+                                          onChange={(e) => handleScoreChange("first_scores", domain, "score", e.target.value)}
+                                          className="text-xs w-full bg-white border border-line rounded p-1.5 font-mono text-center"
+                                        />
+                                      </div>
+                                      <div>
+                                        <label className="block text-[9px] text-ink-muted mb-1">기준 점수</label>
+                                        <input
+                                          type="number"
+                                          step="any"
+                                          value={fScore.max === "" ? "" : fScore.max}
+                                          onChange={(e) => handleScoreChange("first_scores", domain, "max", e.target.value)}
+                                          className="text-xs w-full bg-white border border-line rounded p-1.5 font-mono text-center"
+                                        />
+                                      </div>
+                                    </div>
+                                    <div className="flex flex-col gap-1">
+                                      <label className="block text-[9px] text-ink-muted">채점/평가 근거 (피드백)</label>
+                                      <textarea
+                                        rows={2}
+                                        value={fScore.evidence || ""}
+                                        onChange={(e) => handleScoreChange("first_scores", domain, "evidence", e.target.value)}
+                                        className="text-xs w-full bg-white border border-line rounded px-2.5 py-1.5 leading-relaxed focus:ring-1 focus:ring-leaf-500 focus:outline-hidden"
+                                        placeholder="1차 채점 근거 및 피드백을 입력하세요..."
+                                      />
+                                    </div>
+                                  </div>
+
+                                  {/* 2차 평가 */}
+                                  <div className="p-3 bg-leaf-50/10 rounded border border-line/30 flex flex-col gap-2.5">
+                                    <span className="text-[10px] font-bold text-ink-muted uppercase">2차 평가 결과</span>
+                                    <div className="grid grid-cols-2 gap-3">
+                                      <div>
+                                        <label className="block text-[9px] text-ink-muted mb-1">환산 점수</label>
+                                        <input
+                                          type="number"
+                                          step="any"
+                                          value={sScore.score === "" ? "" : sScore.score}
+                                          onChange={(e) => handleScoreChange("second_scores", domain, "score", e.target.value)}
+                                          className="text-xs w-full bg-white border border-line rounded p-1.5 font-mono text-center"
+                                        />
+                                      </div>
+                                      <div>
+                                        <label className="block text-[9px] text-ink-muted mb-1">기준 점수</label>
+                                        <input
+                                          type="number"
+                                          step="any"
+                                          value={sScore.max === "" ? "" : sScore.max}
+                                          onChange={(e) => handleScoreChange("second_scores", domain, "max", e.target.value)}
+                                          className="text-xs w-full bg-white border border-line rounded p-1.5 font-mono text-center"
+                                        />
+                                      </div>
+                                    </div>
+                                    <div className="flex flex-col gap-1">
+                                      <label className="block text-[9px] text-ink-muted">채점/평가 근거 (피드백)</label>
+                                      <textarea
+                                        rows={2}
+                                        value={sScore.evidence || ""}
+                                        onChange={(e) => handleScoreChange("second_scores", domain, "evidence", e.target.value)}
+                                        className="text-xs w-full bg-white border border-line rounded px-2.5 py-1.5 leading-relaxed focus:ring-1 focus:ring-leaf-500 focus:outline-hidden"
+                                        placeholder="2차 채점 근거 및 피드백을 입력하세요..."
+                                      />
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      {/* Section 2: 성장 종합 서평 */}
+                      <div className="flex flex-col gap-2">
+                        <label className="text-xs font-bold text-leaf-700 flex items-center gap-1.5">
+                          <CheckCircle2 className="w-4 h-4 text-leaf-600" />
+                          02. 성장 종합 서평 수정
+                        </label>
+                        <textarea
+                          value={editDashboardData.overall_summary || ""}
+                          onChange={(e) => setEditDashboardData(prev => prev ? { ...prev, overall_summary: e.target.value } : null)}
+                          rows={4}
+                          className="text-xs w-full bg-white border border-line rounded p-3 leading-relaxed font-medium focus:ring-1 focus:ring-leaf-500 focus:outline-hidden"
+                          placeholder="학습 전반에 대한 성장 서평을 입력하세요"
+                        />
+                      </div>
+
+                      {/* Section 3: 영역별 학습 성장 정성 분석 */}
+                      <div className="flex flex-col gap-3">
+                        <label className="text-xs font-bold text-leaf-700 flex items-center gap-1.5">
+                          <CheckCircle2 className="w-4 h-4 text-leaf-600" />
+                          03. 영역별 학습 성장 정성 분석 수정
+                        </label>
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                          <div className="flex flex-col gap-1.5">
+                            <span className="text-[11px] font-bold text-leaf-600">지식·이해 변화</span>
+                            <textarea
+                              value={editDashboardData.growth_analysis?.지식이해 || ""}
+                              onChange={(e) => setEditDashboardData(prev => prev ? {
+                                ...prev,
+                                growth_analysis: {
+                                  ...prev.growth_analysis,
+                                  지식이해: e.target.value
+                                }
+                              } : null)}
+                              rows={6}
+                              className="text-xs w-full bg-[#faf9f4] border border-line rounded p-2.5 leading-relaxed"
+                              placeholder="지식·이해 영역의 성장과 발전 사항을 입력하세요"
+                            />
+                          </div>
+
+                          <div className="flex flex-col gap-1.5">
+                            <span className="text-[11px] font-bold text-leaf-600">과정·기능 변화</span>
+                            <textarea
+                              value={editDashboardData.growth_analysis?.과정기능 || ""}
+                              onChange={(e) => setEditDashboardData(prev => prev ? {
+                                ...prev,
+                                growth_analysis: {
+                                  ...prev.growth_analysis,
+                                  과정기능: e.target.value
+                                }
+                              } : null)}
+                              rows={6}
+                              className="text-xs w-full bg-[#faf9f4] border border-line rounded p-2.5 leading-relaxed"
+                              placeholder="과정·기능 영역의 성장과 발전 사항을 입력하세요"
+                            />
+                          </div>
+
+                          <div className="flex flex-col gap-1.5">
+                            <span className="text-[11px] font-bold text-leaf-600">가치·태도 변화</span>
+                            <textarea
+                              value={editDashboardData.growth_analysis?.가치태도 || ""}
+                              onChange={(e) => setEditDashboardData(prev => prev ? {
+                                ...prev,
+                                growth_analysis: {
+                                  ...prev.growth_analysis,
+                                  가치태도: e.target.value
+                                }
+                              } : null)}
+                              rows={6}
+                              className="text-xs w-full bg-[#faf9f4] border border-line rounded p-2.5 leading-relaxed"
+                              placeholder="가치·태도 영역의 성장과 발전 사항을 입력하세요"
+                            />
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Section 4: 맞춤형 지도 전략 */}
+                      <div className="flex flex-col gap-2">
+                        <label className="text-xs font-bold text-leaf-700 flex items-center gap-1.5">
+                          <CheckCircle2 className="w-4 h-4 text-leaf-600" />
+                          04. 개인별 맞춤 다음 단계 학습 지도 전략 수정
+                        </label>
+                        <textarea
+                          value={editDashboardData.teaching_feedback || ""}
+                          onChange={(e) => setEditDashboardData(prev => prev ? { ...prev, teaching_feedback: e.target.value } : null)}
+                          rows={3}
+                          className="text-xs w-full bg-white border border-line rounded p-3 leading-relaxed font-medium text-amber-900 border-amber-200 bg-amber-50/20"
+                          placeholder="학생의 향후 성장을 촉진하기 위한 맞춤 학습 지도 전략을 입력하세요"
+                        />
+                      </div>
+
+                      {/* 하단 버튼 */}
+                      <div className="flex justify-end gap-2 border-t border-line pt-4 mt-2">
+                        <button
+                          onClick={() => {
+                            setIsEditingDashboard(false);
+                            setEditDashboardData(null);
+                          }}
+                          className="text-xs border border-line-strong hover:bg-leaf-50 bg-white px-4 py-2 rounded font-semibold cursor-pointer"
+                        >
+                          취소
+                        </button>
+                        <button
+                          onClick={handleSaveDashboardData}
+                          className="text-xs bg-leaf-600 hover:bg-leaf-700 text-white px-5 py-2 rounded font-semibold shadow-xs cursor-pointer"
+                        >
+                          저장하기
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      {/* 상단 타이틀 */}
+                      <div className="flex flex-col md:flex-row md:justify-between md:items-center gap-4 border-b border-line pb-4">
+                        <div className="flex items-center gap-4">
+                          <h2 className="font-serif-title text-2xl font-bold text-ink">{selectedStudent.name}</h2>
+                          <span className="text-ink-soft text-sm font-medium">
+                            {selectedStudent.className} · {selectedStudent.number ? `${selectedStudent.number}번` : "번호 미지정"}
+                          </span>
+                        </div>
+                        
+                        <div className="flex items-center gap-4 flex-wrap">
+                          <button
+                            onClick={() => {
+                              // Deep copy selectedResult
+                              const copy = JSON.parse(JSON.stringify(selectedResult));
+                              if (!copy.achievement_level) {
+                                copy.achievement_level = { first: "C", second: "A" };
+                              }
+                              const domains = ["지식이해", "과정기능", "가치태도"] as const;
+                              if (!copy.first_scores) copy.first_scores = {};
+                              if (!copy.second_scores) copy.second_scores = {};
+                              if (!copy.growth_analysis) copy.growth_analysis = {};
+                              
+                              domains.forEach((d: any) => {
+                                if (!copy.first_scores[d]) {
+                                  copy.first_scores[d] = { score: 0, max: 5, normalized: 0, evidence: "" };
+                                }
+                                if (!copy.second_scores[d]) {
+                                  copy.second_scores[d] = { score: 0, max: 5, normalized: 0, evidence: "" };
+                                }
+                                if (!copy.growth_analysis[d]) {
+                                  copy.growth_analysis[d] = "";
+                                }
+                              });
+                              
+                              setEditDashboardData(copy);
+                              setIsEditingDashboard(true);
+                            }}
+                            className="text-xs font-bold bg-leaf-50 text-leaf-700 hover:bg-leaf-100 border border-leaf-200 px-3 py-2 rounded-md flex items-center gap-1.5 cursor-pointer no-print"
+                          >
+                            <Edit3 className="w-3.5 h-3.5" />
+                            <span>검토 및 수정</span>
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* 방사형 그래프 + 세부 점수 */}
+                      <div className="flex flex-col md:flex-row gap-8 items-center md:items-start">
+                        
+                        {/* 방사형 그래프 컴포넌트 */}
+                        <div className="w-[240px] flex flex-col items-center justify-center shrink-0">
+                          <div className="relative w-[220px] h-[220px]">
+                            {renderRadarChart(selectedResult)}
+                          </div>
+                          <div className="mt-4 flex gap-4 text-[11px] font-medium text-ink-soft no-print">
+                            <div className="flex items-center gap-1.5">
+                              <span className="w-3.5 h-3 bg-leaf-200 border border-leaf-400" />
+                              <span>1차 평가</span>
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                              <span className="w-3.5 h-3 bg-leaf-600 border border-leaf-700" />
+                              <span>2차 평가</span>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* 영역별 점수 (5점 척도 환산) 및 평가 근거 */}
+                        <div className="flex-1 w-full flex flex-col gap-4">
+                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                            {/* 지식이해 */}
+                            <div className="p-3.5 border border-line rounded-lg bg-leaf-50/20">
+                              <div className="text-[10px] font-bold text-ink-soft uppercase tracking-wider mb-1">
+                                지식·이해 점수 (5점 환산)
+                              </div>
+                              <div className="text-[18px] font-serif font-bold text-ink flex items-baseline gap-1.5">
+                                {selectedResult.first_scores.지식이해.normalized !== null ? selectedResult.first_scores.지식이해.normalized.toFixed(1) : "—"}
+                                <span className="text-xs text-ink-muted font-normal font-sans">→</span>
+                                <span className="text-leaf-700">{selectedResult.second_scores.지식이해.normalized !== null ? selectedResult.second_scores.지식이해.normalized.toFixed(1) : "—"}</span>
+                              </div>
+                              {selectedResult.second_scores.지식이해.normalized !== null && selectedResult.first_scores.지식이해.normalized !== null && (
+                                <div className="text-[11px] text-leaf-600 font-bold mt-1">
+                                  ▲ +{(selectedResult.second_scores.지식이해.normalized - selectedResult.first_scores.지식이해.normalized).toFixed(1)} 성장
+                                </div>
+                              )}
+                            </div>
+
+                            {/* 과정기능 */}
+                            <div className="p-3.5 border border-line rounded-lg bg-leaf-50/20">
+                              <div className="text-[10px] font-bold text-ink-soft uppercase tracking-wider mb-1">
+                                과정·기능 점수 (5점 환산)
+                              </div>
+                              <div className="text-[18px] font-serif font-bold text-ink flex items-baseline gap-1.5">
+                                {selectedResult.first_scores.과정기능.normalized !== null ? selectedResult.first_scores.과정기능.normalized.toFixed(1) : "—"}
+                                <span className="text-xs text-ink-muted font-normal font-sans">→</span>
+                                <span className="text-leaf-700">{selectedResult.second_scores.과정기능.normalized !== null ? selectedResult.second_scores.과정기능.normalized.toFixed(1) : "—"}</span>
+                              </div>
+                              {selectedResult.second_scores.과정기능.normalized !== null && selectedResult.first_scores.과정기능.normalized !== null && (
+                                <div className="text-[11px] text-leaf-600 font-bold mt-1">
+                                  ▲ +{(selectedResult.second_scores.과정기능.normalized - selectedResult.first_scores.과정기능.normalized).toFixed(1)} 성장
+                                </div>
+                              )}
+                            </div>
+
+                            {/* 가치태도 */}
+                            <div className="p-3.5 border border-line rounded-lg bg-leaf-50/20">
+                              <div className="text-[10px] font-bold text-ink-soft uppercase tracking-wider mb-1">
+                                가치·태도 점수 (5점 환산)
+                              </div>
+                              <div className="text-[18px] font-serif font-bold text-ink flex items-baseline gap-1.5">
+                                {selectedResult.first_scores.가치태도.normalized !== null ? selectedResult.first_scores.가치태도.normalized.toFixed(1) : "—"}
+                                <span className="text-xs text-ink-muted font-normal font-sans">→</span>
+                                <span className="text-leaf-700">{selectedResult.second_scores.가치태도.normalized !== null ? selectedResult.second_scores.가치태도.normalized.toFixed(1) : "—"}</span>
+                              </div>
+                              {selectedResult.second_scores.가치태도.normalized !== null && selectedResult.first_scores.가치태도.normalized !== null && (
+                                <div className="text-[11px] text-leaf-600 font-bold mt-1">
+                                  ▲ +{(selectedResult.second_scores.가치태도.normalized - selectedResult.first_scores.가치태도.normalized).toFixed(1)} 성장
+                                </div>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* 성장 종합 요약 문구 */}
+                          <div className="p-4 rounded-lg bg-leaf-50 border border-leaf-100 flex flex-col gap-1.5">
+                            <span className="small-caps text-leaf-600 text-xs font-semibold uppercase tracking-wider">성장 종합 서평</span>
+                            <p className="text-sm text-ink-soft leading-relaxed font-medium">
+                              {selectedResult.overall_summary}
+                            </p>
+                          </div>
+                        </div>
+
+                      </div>
+
+                      {/* 영역별 세부 변화 기술서 */}
+                      <div className="flex flex-col gap-4 mt-2">
+                        <h4 className="font-serif text-base font-bold text-ink border-b border-line pb-2 flex items-center gap-2">
+                          영역별 학습 성장 정성 분석
+                        </h4>
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+                          <div className="flex flex-col gap-1.5">
+                            <span className="text-xs font-bold text-leaf-600 flex items-center gap-1.5">
+                              <span className="w-1.5 h-1.5 bg-leaf-600 rounded-full" />
+                              지식·이해 변화
+                            </span>
+                            <p className="text-xs text-ink-soft leading-relaxed bg-[#faf9f4] p-3 rounded border border-line">
+                              {selectedResult.growth_analysis.지식이해}
+                            </p>
+                            <span className="text-[10px] text-ink-muted leading-snug">
+                              * 채점 근거: {selectedResult.second_scores.지식이해.evidence}
+                            </span>
+                          </div>
+
+                          <div className="flex flex-col gap-1.5">
+                            <span className="text-xs font-bold text-leaf-600 flex items-center gap-1.5">
+                              <span className="w-1.5 h-1.5 bg-leaf-600 rounded-full" />
+                              과정·기능 변화
+                            </span>
+                            <p className="text-xs text-ink-soft leading-relaxed bg-[#faf9f4] p-3 rounded border border-line">
+                              {selectedResult.growth_analysis.과정기능}
+                            </p>
+                            <span className="text-[10px] text-ink-muted leading-snug">
+                              * 채점 근거: {selectedResult.second_scores.과정기능.evidence}
+                            </span>
+                          </div>
+
+                          <div className="flex flex-col gap-1.5">
+                            <span className="text-xs font-bold text-leaf-600 flex items-center gap-1.5">
+                              <span className="w-1.5 h-1.5 bg-leaf-600 rounded-full" />
+                              가치·태도 변화
+                            </span>
+                            <p className="text-xs text-ink-soft leading-relaxed bg-[#faf9f4] p-3 rounded border border-line">
+                              {selectedResult.growth_analysis.가치태도}
+                            </p>
+                            <span className="text-[10px] text-ink-muted leading-snug">
+                              * * 채점 근거: {selectedResult.second_scores.가치태도.evidence}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* 다음 단계 지도 제안 (Amber 배너) */}
+                      <div className="bg-amber-soft p-4 border-l-4 border-amber rounded-r-lg flex flex-col gap-1.5">
+                        <span className="small-caps text-amber text-xs font-semibold uppercase tracking-wider">
+                          개인별 맞춤 다음 단계 학습 지도 전략
                         </span>
+                        <p className="text-sm text-amber font-medium leading-relaxed italic">
+                          &ldquo;{selectedResult.teaching_feedback}&rdquo;
+                        </p>
                       </div>
-                      
-                      <div className="flex items-center gap-3">
-                        <span className="small-caps text-ink-muted text-xs font-semibold uppercase tracking-wider">성취수준</span>
-                        <div className="flex items-center gap-2">
-                          <span className="font-serif text-lg font-bold text-coral bg-coral-soft px-2.5 py-0.5 rounded border border-coral/10">
-                            {selectedResult.achievement_level?.first || "C"}
-                          </span>
-                          <span className="text-ink-muted font-bold">→</span>
-                          <span className="font-serif text-lg font-bold text-leaf-700 bg-leaf-100 px-2.5 py-0.5 rounded border border-leaf-200">
-                            {selectedResult.achievement_level?.second || "A"}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* 방사형 그래프 + 세부 점수 */}
-                    <div className="flex flex-col md:flex-row gap-8 items-center md:items-start">
-                      
-                      {/* 방사형 그래프 컴포넌트 */}
-                      <div className="w-[240px] flex flex-col items-center justify-center shrink-0">
-                        <div className="relative w-[220px] h-[220px]">
-                          {renderRadarChart(selectedResult)}
-                        </div>
-                        <div className="mt-4 flex gap-4 text-[11px] font-medium text-ink-soft no-print">
-                          <div className="flex items-center gap-1.5">
-                            <span className="w-3.5 h-3 bg-leaf-200 border border-leaf-400" />
-                            <span>1차 평가</span>
-                          </div>
-                          <div className="flex items-center gap-1.5">
-                            <span className="w-3.5 h-3 bg-leaf-600 border border-leaf-700" />
-                            <span>2차 평가</span>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* 영역별 점수 (5점 척도 환산) 및 평가 근거 */}
-                      <div className="flex-1 w-full flex flex-col gap-4">
-                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                          {/* 지식이해 */}
-                          <div className="p-3.5 border border-line rounded-lg bg-leaf-50/20">
-                            <div className="text-[10px] font-bold text-ink-soft uppercase tracking-wider mb-1">
-                              지식·이해 점수 (5점 환산)
-                            </div>
-                            <div className="text-[18px] font-serif font-bold text-ink flex items-baseline gap-1.5">
-                              {selectedResult.first_scores.지식이해.normalized !== null ? selectedResult.first_scores.지식이해.normalized.toFixed(1) : "—"}
-                              <span className="text-xs text-ink-muted font-normal font-sans">→</span>
-                              <span className="text-leaf-700">{selectedResult.second_scores.지식이해.normalized !== null ? selectedResult.second_scores.지식이해.normalized.toFixed(1) : "—"}</span>
-                            </div>
-                            {selectedResult.second_scores.지식이해.normalized !== null && selectedResult.first_scores.지식이해.normalized !== null && (
-                              <div className="text-[11px] text-leaf-600 font-bold mt-1">
-                                ▲ +{(selectedResult.second_scores.지식이해.normalized - selectedResult.first_scores.지식이해.normalized).toFixed(1)} 성장
-                              </div>
-                            )}
-                          </div>
-
-                          {/* 과정기능 */}
-                          <div className="p-3.5 border border-line rounded-lg bg-leaf-50/20">
-                            <div className="text-[10px] font-bold text-ink-soft uppercase tracking-wider mb-1">
-                              과정·기능 점수 (5점 환산)
-                            </div>
-                            <div className="text-[18px] font-serif font-bold text-ink flex items-baseline gap-1.5">
-                              {selectedResult.first_scores.과정기능.normalized !== null ? selectedResult.first_scores.과정기능.normalized.toFixed(1) : "—"}
-                              <span className="text-xs text-ink-muted font-normal font-sans">→</span>
-                              <span className="text-leaf-700">{selectedResult.second_scores.과정기능.normalized !== null ? selectedResult.second_scores.과정기능.normalized.toFixed(1) : "—"}</span>
-                            </div>
-                            {selectedResult.second_scores.과정기능.normalized !== null && selectedResult.first_scores.과정기능.normalized !== null && (
-                              <div className="text-[11px] text-leaf-600 font-bold mt-1">
-                                ▲ +{(selectedResult.second_scores.과정기능.normalized - selectedResult.first_scores.과정기능.normalized).toFixed(1)} 성장
-                              </div>
-                            )}
-                          </div>
-
-                          {/* 가치태도 */}
-                          <div className="p-3.5 border border-line rounded-lg bg-leaf-50/20">
-                            <div className="text-[10px] font-bold text-ink-soft uppercase tracking-wider mb-1">
-                              가치·태도 점수 (5점 환산)
-                            </div>
-                            <div className="text-[18px] font-serif font-bold text-ink flex items-baseline gap-1.5">
-                              {selectedResult.first_scores.가치태도.normalized !== null ? selectedResult.first_scores.가치태도.normalized.toFixed(1) : "—"}
-                              <span className="text-xs text-ink-muted font-normal font-sans">→</span>
-                              <span className="text-leaf-700">{selectedResult.second_scores.가치태도.normalized !== null ? selectedResult.second_scores.가치태도.normalized.toFixed(1) : "—"}</span>
-                            </div>
-                            {selectedResult.second_scores.가치태도.normalized !== null && selectedResult.first_scores.가치태도.normalized !== null && (
-                              <div className="text-[11px] text-leaf-600 font-bold mt-1">
-                                ▲ +{(selectedResult.second_scores.가치태도.normalized - selectedResult.first_scores.가치태도.normalized).toFixed(1)} 성장
-                              </div>
-                            )}
-                          </div>
-                        </div>
-
-                        {/* 성장 종합 요약 문구 */}
-                        <div className="p-4 rounded-lg bg-leaf-50 border border-leaf-100 flex flex-col gap-1.5">
-                          <span className="small-caps text-leaf-600 text-xs font-semibold uppercase tracking-wider">성장 종합 서평</span>
-                          <p className="text-sm text-ink-soft leading-relaxed font-medium">
-                            {selectedResult.overall_summary}
-                          </p>
-                        </div>
-                      </div>
-
-                    </div>
-
-                    {/* 영역별 세부 변화 기술서 */}
-                    <div className="flex flex-col gap-4 mt-2">
-                      <h4 className="font-serif text-base font-bold text-ink border-b border-line pb-2 flex items-center gap-2">
-                        영역별 학습 성장 정성 분석
-                      </h4>
-                      <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
-                        <div className="flex flex-col gap-1.5">
-                          <span className="text-xs font-bold text-leaf-600 flex items-center gap-1.5">
-                            <span className="w-1.5 h-1.5 bg-leaf-600 rounded-full" />
-                            지식·이해 변화
-                          </span>
-                          <p className="text-xs text-ink-soft leading-relaxed bg-[#faf9f4] p-3 rounded border border-line">
-                            {selectedResult.growth_analysis.지식이해}
-                          </p>
-                          <span className="text-[10px] text-ink-muted leading-snug">
-                            * 채점 근거: {selectedResult.second_scores.지식이해.evidence}
-                          </span>
-                        </div>
-
-                        <div className="flex flex-col gap-1.5">
-                          <span className="text-xs font-bold text-leaf-600 flex items-center gap-1.5">
-                            <span className="w-1.5 h-1.5 bg-leaf-600 rounded-full" />
-                            과정·기능 변화
-                          </span>
-                          <p className="text-xs text-ink-soft leading-relaxed bg-[#faf9f4] p-3 rounded border border-line">
-                            {selectedResult.growth_analysis.과정기능}
-                          </p>
-                          <span className="text-[10px] text-ink-muted leading-snug">
-                            * 채점 근거: {selectedResult.second_scores.과정기능.evidence}
-                          </span>
-                        </div>
-
-                        <div className="flex flex-col gap-1.5">
-                          <span className="text-xs font-bold text-leaf-600 flex items-center gap-1.5">
-                            <span className="w-1.5 h-1.5 bg-leaf-600 rounded-full" />
-                            가치·태도 변화
-                          </span>
-                          <p className="text-xs text-ink-soft leading-relaxed bg-[#faf9f4] p-3 rounded border border-line">
-                            {selectedResult.growth_analysis.가치태도}
-                          </p>
-                          <span className="text-[10px] text-ink-muted leading-snug">
-                            * 채점 근거: {selectedResult.second_scores.가치태도.evidence}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* 다음 단계 지도 제안 (Amber 배너) */}
-                    <div className="bg-amber-soft p-4 border-l-4 border-amber rounded-r-lg flex flex-col gap-1.5">
-                      <span className="small-caps text-amber text-xs font-semibold uppercase tracking-wider">
-                        개인별 맞춤 다음 단계 학습 지도 전략
-                      </span>
-                      <p className="text-sm text-amber font-medium leading-relaxed italic">
-                        &ldquo;{selectedResult.teaching_feedback}&rdquo;
-                      </p>
-                    </div>
-                  </>
+                    </>
+                  )
                 ) : null}
 
               </div>
@@ -1992,14 +2422,24 @@ export default function App() {
                   />
                 </div>
 
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-3 gap-2.5">
                   <div className="flex flex-col gap-1.5">
-                    <label className="text-xs font-semibold text-ink-soft">학반</label>
+                    <label className="text-xs font-semibold text-ink-soft">학년</label>
                     <input
                       type="text"
-                      value={newStudent.className}
-                      onChange={(e) => setNewStudent({ ...newStudent, className: e.target.value })}
-                      placeholder="예: 4반"
+                      value={newStudent.grade}
+                      onChange={(e) => setNewStudent({ ...newStudent, grade: e.target.value })}
+                      placeholder="예: 4"
+                      className="w-full px-3 py-2 border border-line-strong rounded-md text-sm focus:outline-none focus:ring-1 focus:ring-leaf-400 bg-[#fafafa]"
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-xs font-semibold text-ink-soft">반</label>
+                    <input
+                      type="text"
+                      value={newStudent.classVal}
+                      onChange={(e) => setNewStudent({ ...newStudent, classVal: e.target.value })}
+                      placeholder="예: 3"
                       className="w-full px-3 py-2 border border-line-strong rounded-md text-sm focus:outline-none focus:ring-1 focus:ring-leaf-400 bg-[#fafafa]"
                     />
                   </div>
@@ -2009,7 +2449,7 @@ export default function App() {
                       type="text"
                       value={newStudent.number}
                       onChange={(e) => setNewStudent({ ...newStudent, number: e.target.value })}
-                      placeholder="예: 2"
+                      placeholder="예: 15"
                       className="w-full px-3 py-2 border border-line-strong rounded-md text-sm focus:outline-none focus:ring-1 focus:ring-leaf-400 bg-[#fafafa]"
                     />
                   </div>
@@ -2019,7 +2459,7 @@ export default function App() {
                   <button
                     type="button"
                     onClick={() => {
-                      setNewStudent({ name: "", className: "", number: "" });
+                      setNewStudent({ name: "", grade: "", classVal: "", number: "" });
                       setShowAddModal(false);
                     }}
                     className="text-xs border border-line-strong px-4 py-2 rounded font-medium hover:bg-leaf-50 cursor-pointer"
