@@ -497,19 +497,85 @@ export default function App() {
     }
   };
 
-  // Helper base64 conversion
+  // Helper base64 conversion with automatic image compression
   async function fileToBase64(file: File): Promise<string> {
     return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => {
-        if (typeof reader.result === "string") {
-          resolve(reader.result.split(",")[1]);
-        } else {
-          reject(new Error("Failed to convert file to base64"));
+      // If the file is not an image (e.g. PDF), use regular FileReader without compression
+      if (!file.type.startsWith("image/")) {
+        const reader = new FileReader();
+        reader.onload = () => {
+          if (typeof reader.result === "string") {
+            resolve(reader.result.split(",")[1]);
+          } else {
+            reject(new Error("Failed to convert file to base64"));
+          }
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+        return;
+      }
+
+      // If it is an image, compress/resize it on an HTML Canvas to prevent "Request Entity Too Large"
+      const img = new Image();
+      img.src = URL.createObjectURL(file);
+      img.onload = () => {
+        URL.revokeObjectURL(img.src);
+        let width = img.width;
+        let height = img.height;
+        const maxDim = 1200; // Limit max dimension to 1200px (retains high-fidelity text but minimizes file size)
+
+        if (width > maxDim || height > maxDim) {
+          if (width > height) {
+            height = Math.round((height * maxDim) / width);
+            width = maxDim;
+          } else {
+            width = Math.round((width * maxDim) / height);
+            height = maxDim;
+          }
         }
+
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+
+        const ctx = canvas.getContext("2d");
+        if (!ctx) {
+          // Fallback to standard base64 if canvas is not supported
+          const reader = new FileReader();
+          reader.onload = () => {
+            if (typeof reader.result === "string") {
+              resolve(reader.result.split(",")[1]);
+            } else {
+              reject(new Error("Failed to convert file to base64"));
+            }
+          };
+          reader.onerror = reject;
+          reader.readAsDataURL(file);
+          return;
+        }
+
+        // Fill background with white in case of transparent images (PNGs, etc.)
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(0, 0, width, height);
+        ctx.drawImage(img, 0, 0, width, height);
+
+        // Convert to high-quality JPEG (75% quality is optimal for readability vs compression)
+        const dataUrl = canvas.toDataURL("image/jpeg", 0.75);
+        resolve(dataUrl.split(",")[1]);
       };
-      reader.onerror = reject;
-      reader.readAsDataURL(file);
+      img.onerror = () => {
+        // Fallback to standard base64 on error
+        const reader = new FileReader();
+        reader.onload = () => {
+          if (typeof reader.result === "string") {
+            resolve(reader.result.split(",")[1]);
+          } else {
+            reject(new Error("Failed to convert file to base64"));
+          }
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      };
     });
   }
 
@@ -577,7 +643,24 @@ export default function App() {
         }),
       });
 
-      const data = await response.json();
+      let responseText = "";
+      try {
+        responseText = await response.text();
+      } catch (err) {
+        throw new Error("서버로부터 응답을 받지 못했습니다. 네트워크 연결을 확인해 주세요.");
+      }
+
+      let data: any;
+      try {
+        data = JSON.parse(responseText);
+      } catch (err) {
+        // Handle non-JSON responses (like Vercel Payload Too Large, 413 or general HTML gateway errors) gracefully
+        if (response.status === 413 || responseText.includes("Too Large") || responseText.includes("Request Entity Too Large")) {
+          throw new Error("전송된 이미지의 총 용량이 서버 제한(4.5MB)을 초과했습니다. 평가지 이미지 파일 크기를 압축하거나 장수를 줄여서 다시 시도해 주세요.");
+        }
+        console.error("Non-JSON Server Response:", responseText);
+        throw new Error(`분석 중 오류가 발생했습니다. (서버 응답코드: ${response.status}). 관리자에게 문의해 주세요.`);
+      }
 
       if (!response.ok || !data.success) {
         throw new Error(data.error || "분석 요청에 실패했습니다.");
